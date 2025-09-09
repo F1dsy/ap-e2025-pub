@@ -1,4 +1,4 @@
-module APL.Parser (parseAPL) where
+module APL.Parser (parseAPL, lInteger) where
 
 import APL.AST (Exp (..), VName)
 import Control.Monad (void)
@@ -20,14 +20,102 @@ import Text.Megaparsec
   )
 import Text.Megaparsec.Char (space)
 
+-- Remember to extend this as you support more of APL!
+keywords :: [String]
+keywords =
+  [ "true",
+    "false"
+  ]
+
 -- Do not change this definition.
 type Parser = Parsec Void String
 
+pAtom :: Parser Exp
+pAtom =
+  choice
+    [ CstInt <$> lInteger,
+      CstBool <$> pBool,
+      Var
+        <$> lVName,
+      lString "("
+        *> pExp
+        <* lString ")"
+    ]
+
+-- pExp :: Parser Exp
+-- pExp =
+--   choice
+--     [ CstInt <$> lInteger,
+--       CstBool <$> pBool,
+--       Var <$> lVName
+--     ]
+
+-- pExp0' :: Parser Exp
+-- pExp0' =
+--   choice
+--     [ do
+--     ]
+
+-- lString "+"
+
+pExp0 :: Parser Exp
+pExp0 = do
+  x <- pAtom
+  chain x
+  where
+    chain x =
+      choice
+        [ do
+            lString "+"
+            y <- pAtom
+            chain $ Add x y,
+          do
+            lString "-"
+            y <- pAtom
+            chain $ Sub x y,
+          do
+            lString "*"
+            y <- pAtom
+            chain $ Mul x y,
+          do
+            lString "/"
+            y <- pAtom
+            chain $ Div x y,
+          pure
+            x
+        ]
+
 pExp :: Parser Exp
-pExp = undefined
+pExp = pExp0
+
+pBool :: Parser Bool
+pBool =
+  choice
+    [ True <$ lKeyword "true",
+      False <$ lKeyword "false"
+    ]
 
 -- Do not change this definition.
 parseAPL :: FilePath -> String -> Either String Exp
 parseAPL fname s = case parse (space *> pExp <* eof) fname s of
   Left err -> Left $ errorBundlePretty err
   Right x -> Right x
+
+lexeme :: Parser a -> Parser a
+lexeme p = p <* space
+
+lInteger :: Parser Integer
+lInteger = lexeme $ read <$> some (satisfy isDigit) <* notFollowedBy (satisfy isAlpha)
+
+lVName :: Parser VName
+lVName = lexeme $ try $ do
+  c <- satisfy isAlpha
+  cs <- many $ satisfy isAlphaNum
+  let v = c : cs
+  if v `elem` keywords then fail "Keyword error" else pure v
+
+lKeyword :: String -> Parser ()
+lKeyword s = lexeme $ try $ chunk s *> notFollowedBy (satisfy isAlphaNum)
+
+lString :: String -> Parser ()
+lString s = lexeme $ void $ chunk s

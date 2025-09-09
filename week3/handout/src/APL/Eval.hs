@@ -25,7 +25,7 @@ envExtend :: VName -> Val -> Env -> Env
 envExtend v val env = (v, val) : env
 
 envLookup :: VName -> Env -> Maybe Val
-envLookup v env = lookup v env
+envLookup = lookup
 
 type Error = String
 
@@ -73,8 +73,7 @@ evalIntBinOp f e1 e2 = do
     (_, _) -> failure "Non-integer operand"
 
 evalIntBinOp' :: (Integer -> Integer -> Integer) -> Exp -> Exp -> EvalM Val
-evalIntBinOp' f e1 e2 =
-  evalIntBinOp f' e1 e2
+evalIntBinOp' f = evalIntBinOp f'
   where
     f' x y = pure $ f x y
 
