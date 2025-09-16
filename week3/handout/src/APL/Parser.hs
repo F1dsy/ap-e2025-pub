@@ -24,7 +24,10 @@ import Text.Megaparsec.Char (space)
 keywords :: [String]
 keywords =
   [ "true",
-    "false"
+    "false",
+    "if",
+    "then",
+    "else"
   ]
 
 -- Do not change this definition.
@@ -35,55 +38,52 @@ pAtom =
   choice
     [ CstInt <$> lInteger,
       CstBool <$> pBool,
-      Var
-        <$> lVName,
-      lString "("
-        *> pExp
-        <* lString ")"
+      Var <$> lVName,
+      lString "(" *> pExp <* lString ")"
     ]
 
--- pExp :: Parser Exp
--- pExp =
---   choice
---     [ CstInt <$> lInteger,
---       CstBool <$> pBool,
---       Var <$> lVName
---     ]
-
--- pExp0' :: Parser Exp
--- pExp0' =
---   choice
---     [ do
---     ]
-
--- lString "+"
+pExp1 :: Parser Exp
+pExp1 = pLExp >>= chain
+  where
+    chain x =
+      choice
+        [ do
+            lString "*"
+            y <- pLExp
+            chain $ Mul x y,
+          do
+            lString "/"
+            y <- pLExp
+            chain $ Div x y,
+          pure x
+        ]
 
 pExp0 :: Parser Exp
-pExp0 = do
-  x <- pAtom
-  chain x
+pExp0 = pExp1 >>= chain
   where
     chain x =
       choice
         [ do
             lString "+"
-            y <- pAtom
+            y <- pExp1
             chain $ Add x y,
           do
             lString "-"
-            y <- pAtom
+            y <- pExp1
             chain $ Sub x y,
-          do
-            lString "*"
-            y <- pAtom
-            chain $ Mul x y,
-          do
-            lString "/"
-            y <- pAtom
-            chain $ Div x y,
           pure
             x
         ]
+
+pLExp :: Parser Exp
+pLExp =
+  choice
+    [ If
+        <$> (lKeyword "if" *> pExp0)
+        <*> (lKeyword "then" *> pExp0)
+        <*> (lKeyword "else" *> pExp0),
+      pAtom
+    ]
 
 pExp :: Parser Exp
 pExp = pExp0
