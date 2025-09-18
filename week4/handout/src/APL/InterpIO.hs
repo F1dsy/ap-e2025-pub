@@ -8,9 +8,8 @@ runEvalIO = runEvalIO' envEmpty stateInitial
     runEvalIO' :: Env -> State -> EvalM a -> IO (Either Error a)
     runEvalIO' _ _ (Pure x) = pure $ pure x
     runEvalIO' r s (Free (ReadOp k)) = runEvalIO' r s $ k r
-
--- Uncomment once you've defined all of the below effects.
--- runEvalIO' r s (Free (StateGetOp k)) = runEvalIO' r s $ k s
--- runEvalIO' r _ (Free (StatePutOp s' m)) = runEvalIO' r s' m
--- runEvalIO' r s (Free (PrintOp p m)) = error "TODO"
--- runEvalIO' _ _ (Free (ErrorOp e)) = pure $ Left e
+    -- Uncomment once you've defined all of the below effects.
+    runEvalIO' r s (Free (StateGetOp k)) = runEvalIO' r s $ k s
+    runEvalIO' r _ (Free (StatePutOp s' m)) = runEvalIO' r s' m
+    runEvalIO' r s (Free (PrintOp p m)) = putStrLn p >> runEvalIO' r s m
+    runEvalIO' _ _ (Free (ErrorOp e)) = pure $ Left e
