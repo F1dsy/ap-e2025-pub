@@ -66,6 +66,7 @@ instance (Functor e) => Applicative (Free e) where
   (<*>) = ap
 
 instance (Functor e) => Monad (Free e) where
+  (>>=) :: (Functor e) => Free e a -> (a -> Free e b) -> Free e b
   Pure x >>= f = f x
   Free g >>= f = Free $ (>>= f) <$> g
 
@@ -73,12 +74,16 @@ data EvalOp a
   = ReadOp (Env -> a)
   | StateGetOp (State -> a)
   | StatePutOp State a
+  | PrintOp String a
+  | ErrorOp Error
 
 instance Functor EvalOp where
   fmap :: (a -> b) -> EvalOp a -> EvalOp b
   fmap f (ReadOp k) = ReadOp $ f . k
   fmap f (StateGetOp k) = StateGetOp $ f . k
   fmap f (StatePutOp s a) = StatePutOp s $ f a
+  fmap f (PrintOp str a) = PrintOp str $ f a
+  fmap _ (ErrorOp err) = ErrorOp err
 
 type EvalM a = Free EvalOp a
 
@@ -91,9 +96,9 @@ modifyEffects g (Free e) = Free $ modifyEffects g <$> g e
 
 localEnv :: (Env -> Env) -> EvalM a -> EvalM a
 localEnv f = modifyEffects g
-  where   
-      g (ReadOp k) = ReadOp $ k . f
-      g op = op  
+  where
+    g (ReadOp k) = ReadOp $ k . f
+    g op = op
 
 getState :: EvalM State
 getState = Free $ StateGetOp $ \s -> pure s
@@ -107,10 +112,10 @@ modifyState f = do
   putState $ f s
 
 evalPrint :: String -> EvalM ()
-evalPrint = error "TODO"
+evalPrint str = Free $ PrintOp str $ pure ()
 
 failure :: String -> EvalM a
-failure = error "TODO"
+failure err = Free $ ErrorOp err
 
 catch :: EvalM a -> EvalM a -> EvalM a
 catch = error "To be completed in assignment 4."

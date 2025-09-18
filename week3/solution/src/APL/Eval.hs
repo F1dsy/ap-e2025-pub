@@ -128,3 +128,9 @@ eval (Apply e1 e2) = do
       failure "Cannot apply non-function"
 eval (TryCatch e1 e2) =
   eval e1 `catch` eval e2
+eval _ = (EvalM $ \env -> Left "rr" ) >>= (\env -> pure $ ValInt 1)
+
+-- askEnv = EvalM $ \env -> Right env
+-- eval _ = do
+--   env <- askEnv
+--   pure undefined
