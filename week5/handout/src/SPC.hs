@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -Wno-missing-fields #-}
+
 module SPC
   ( -- * SPC startup
     SPC,
@@ -7,6 +9,7 @@ module SPC
     jobAdd,
     jobStatus,
     jobCancel,
+    jobWait,
     JobDoneReason (..),
     JobStatus (..),
   )
@@ -45,7 +48,10 @@ data SPCState = SPCState
   { spcPingCounter :: Int,
     spcJobCounter :: JobId,
     spcJobsPending :: [(JobId, Job)],
-    spcJobsDone :: [(JobId, JobDoneReason)]
+    spcJobsDone :: [(JobId, JobDoneReason)],
+    spcJobsWaiting :: [(JobId, ReplyChan (Maybe JobDoneReason))],
+    spcChan :: Chan SPCMsg,
+    spcCurrentJob :: Maybe (JobId, ThreadId)
   }
 
 newtype SPCM a = SPCM (SPCState -> IO (a, SPCState))
@@ -114,7 +120,13 @@ jobStatus (SPC s) jobId = requestReply s (MsgJobStatus jobId)
 
 -- | Asynchronously cancel a job.
 jobCancel :: SPC -> JobId -> IO ()
-jobCancel (SPC s) jobId = requestReply s (MsgJobCancel jobId)
+jobCancel (SPC s) jobId = sendTo s (MsgJobCancel jobId)
+
+-- | Synchronously block until job is done and return the reason.
+-- Returns 'Nothing' if job is not known to this SPC instance.
+jobWait :: SPC -> JobId -> IO (Maybe JobDoneReason)
+jobWait (SPC c) jobid =
+  requestReply c $ MsgJobWait jobid
 
 -- | A unique identifier of a job that has been enqueued.
 newtype JobId = JobId Int
@@ -132,18 +144,21 @@ data SPCMsg -- TODO: add messages.
   | MsgJobAdd Job (ReplyChan JobId)
   | MsgJobStatus JobId (ReplyChan (Maybe JobStatus))
   | MsgJobCancel JobId
+  | MsgJobWait JobId (ReplyChan (Maybe JobDoneReason))
+  | MsgJobDone JobId
 
 -- | A Handle to the SPC instance.
 data SPC = SPC (Server SPCMsg)
 
 startSPC :: IO SPC
 startSPC = do
-  let initialState = SPCState {spcPingCounter = 0, spcJobCounter = JobId 0, spcJobsPending = [], spcJobsDone = []}
+  let initialState = SPCState {spcPingCounter = 0, spcJobCounter = JobId 0, spcJobsPending = [], spcJobsDone = [], spcJobsWaiting = [], spcCurrentJob = Nothing}
   server <- spawn (runSPCM initialState . forever . handleMsg)
   pure $ SPC server
 
 handleMsg :: Chan SPCMsg -> SPCM ()
 handleMsg c = do
+  schedule
   msg <- io $ receive c
   case msg of
     (MsgPing rsvp) -> do
@@ -154,7 +169,9 @@ handleMsg c = do
           { spcPingCounter = succ $ spcPingCounter state,
             spcJobCounter = spcJobCounter state,
             spcJobsPending = spcJobsPending state,
-            spcJobsDone = spcJobsDone state
+            spcJobsDone = spcJobsDone state,
+            spcJobsWaiting = spcJobsWaiting state,
+            spcCurrentJob = Nothing
           }
     (MsgJobAdd j rsvp) -> do
       state <- get
@@ -164,27 +181,85 @@ handleMsg c = do
           { spcPingCounter = spcPingCounter state,
             spcJobCounter = JobId $ succ jobId,
             spcJobsPending = (JobId jobId, j) : spcJobsPending state,
-            spcJobsDone = spcJobsDone state
+            spcJobsDone = spcJobsDone state,
+            spcJobsWaiting = spcJobsWaiting state,
+            spcCurrentJob = Nothing
           }
       io $ reply rsvp $ JobId jobId
     (MsgJobStatus jobId rsvp) -> do
       state <- get
 
-      io $ reply rsvp $ case lookup jobId $ spcJobsPending state of
-        Just _ -> Just JobPending
+      io $ reply rsvp $ case (lookup jobId $ spcJobsPending state, spcCurrentJob state, lookup jobId $ spcJobsDone state) of
+        (Just _, _, _) -> Just JobPending
+        (_, Just (jobId', _), _) | jobId' == jobId -> Just JobRunning
+        (_, _, Just reason) -> Just $ JobDone reason
         _ -> Nothing
     (MsgJobCancel jobId) -> do
       state <- get
-      case lookup jobId $ spcJobsPending state of
-        Just job -> undefined
-        _ -> Nothing
+      case spcCurrentJob state of
+        Just (jobId', threadId) | jobId' == jobId -> do
+          io $ killThread threadId
+          jobDone jobId' DoneCancelled
+        _ -> pure ()
+    -- let jid = spcPingCounter state
+
+    MsgJobWait jobId rsvp -> do
+      state <- get
+      case lookup jobId $ spcJobsDone state of
+        Nothing ->
+          put $
+            SPCState
+              { spcPingCounter = spcPingCounter state,
+                spcJobCounter = spcJobCounter state,
+                spcJobsPending = spcJobsPending state,
+                spcJobsDone = spcJobsDone state,
+                spcJobsWaiting = (jobId, rsvp) : spcJobsWaiting state,
+                spcCurrentJob = Nothing
+              }
+        Just reason ->
+          io $ reply rsvp $ Just reason
+    MsgJobDone jobId -> do
+      state <- get
+      case spcCurrentJob state of
+        Just (jobId', threadId) | jobId' == jobId -> do
+          io $ killThread threadId
+          jobDone jobId' Done
+        _ -> pure ()
+
+jobDone :: JobId -> JobDoneReason -> SPCM ()
+jobDone jobId reason = do
+  state <- get
+  case lookup jobId $ spcJobsPending state of
+    Nothing -> pure ()
+    Just _ -> do
+      let (waiting, rest) = partition ((== jobId) . fst) $ spcJobsWaiting state
+      forM_ waiting $ \(_, chan) -> io $ reply chan $ Just reason
+      put $
+        SPCState
+          { spcJobsPending = removeAssoc jobId $ spcJobsPending state,
+            spcJobsDone = (jobId, reason) : spcJobsDone state,
+            spcJobsWaiting = rest,
+            spcCurrentJob = Nothing
+          }
+
+--   undefined
+
+schedule :: SPCM ()
+schedule = do
+  state <- get
+  case (spcCurrentJob state, spcJobsPending state) of
+    (Nothing, (jobId, job) : jobs) -> do
+      threadId <- io $ forkIO $ jobAction job
       put
         SPCState
           { spcPingCounter = spcPingCounter state,
             spcJobCounter = spcJobCounter state,
-            spcJobsPending = spcJobsPending state,
-            spcJobsDone = (jobId, DoneCancelled) : spcJobsDone state
+            spcJobsPending = jobs,
+            spcJobsDone = spcJobsDone state,
+            spcJobsWaiting = spcJobsWaiting state,
+            spcCurrentJob = Just (jobId, threadId)
           }
+    _ -> pure ()
 
 pingSPC :: SPC -> IO Int
 pingSPC (SPC s) = requestReply s MsgPing

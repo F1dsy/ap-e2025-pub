@@ -9,6 +9,7 @@ import SPC
     jobAdd,
     jobCancel,
     jobStatus,
+    jobWait,
     pingSPC,
     startSPC,
   )
@@ -36,11 +37,19 @@ tests =
           spc <- startSPC
           j <- jobAdd spc $ Job (pure ()) 1
           r <- jobStatus spc j
-          r @?= Just JobPending,
+          r @?= Just JobRunning,
         testCase "canceling job" $ do
           spc <- startSPC
           j <- jobAdd spc $ Job (pure ()) 1
           jobCancel spc j
           r <- jobStatus spc j
-          r @?= Just (JobDone DoneCancelled)
+          r @?= Just (JobDone DoneCancelled),
+        testCase "running job" $ do
+          ref <- newIORef False
+          spc <- startSPC
+          j <- jobAdd spc $ Job (writeIORef ref True) 1
+          r <- jobWait spc j
+          r @?= Just Done
+          x <- readIORef ref
+          x @?= True
       ]
